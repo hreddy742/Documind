@@ -1,0 +1,20 @@
+app = "documind-ollama"
+primary_region = "iad"
+
+[build]
+  image = "ollama/ollama:latest"
+
+[env]
+  OLLAMA_HOST = "0.0.0.0"
+  OLLAMA_KEEP_ALIVE = "24h"
+
+[[services]]
+  internal_port = 11434
+  protocol = "tcp"
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+[mounts]
+  source = "ollama_data"
+  destination = "/root/.ollama"
