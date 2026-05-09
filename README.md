@@ -1,354 +1,533 @@
-# DocuMind — Enterprise Document Intelligence
+# DocuMind
 
-> Ask questions about any document. Get answers with exact source citations
-> and hallucination detection. Built with hybrid retrieval and 100% open source.
+DocuMind is an open-source document intelligence application for uploading
+PDF, DOCX, and text files, asking natural-language questions, and receiving
+answers grounded in retrieved source passages. The project combines a React
+frontend with a FastAPI backend, Qdrant vector search, PostgreSQL document
+metadata, BM25 keyword retrieval, sentence-transformer embeddings, cross-encoder
+reranking, Ollama-powered generation, and hallucination risk scoring.
 
-[![Live Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://documind.vercel.app)
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11-blue)](backend/requirements.txt)
-[![Open Source](https://img.shields.io/badge/open_source-100%25-green)]()
+The goal is to provide a practical Retrieval-Augmented Generation (RAG)
+reference app that is local-first, inspectable, and deployable without relying
+on hosted LLM APIs.
 
-**Live demo:** https://documind.vercel.app
+## Features
 
----
+- Upload PDF, DOCX, and TXT documents up to 50 MB.
+- Choose between fixed, semantic, and sentence-window chunking strategies.
+- Generate local embeddings with `BAAI/bge-small-en-v1.5`.
+- Store vectorized chunks and payloads in Qdrant.
+- Persist document metadata in PostgreSQL.
+- Combine dense vector search with BM25 sparse search through Reciprocal Rank
+  Fusion.
+- Rerank retrieved chunks with `cross-encoder/ms-marco-MiniLM-L-6-v2`.
+- Generate cited answers with Ollama and `llama3.2:3b`.
+- Stream answers to the frontend with Server-Sent Events.
+- Score answer support with an NLI-based hallucination risk classifier.
+- Display source cards, relevance indicators, risk badges, and latency metrics.
 
-## The problem
+## Tech Stack
 
-Enterprise employees spend 3–4 hours daily searching through documents,
-manuals, and reports. When AI answers their questions, they cannot tell
-if the answer was made up or actually comes from the document. Legal and
-compliance teams reject AI tools they cannot verify.
-
-## What DocuMind does
-
-DocuMind lets you upload any PDF, Word document, or text file and ask
-questions about it in plain English. Every answer includes:
-
-- **Exact source citations** — which page and which passage the answer came from
-- **Hallucination detection** — a score showing how well the answer is
-  supported by the document
-- **Performance metrics** — how long each step took
-
-No cloud AI services. No API keys. Runs entirely on open source models.
-
----
-
-## Live demo
-
-Upload a PDF → ask "What are the key findings?" → get an answer like:
-
-> The report identifies three primary risk factors [1]. Revenue declined
-> 12% in Q3 [2], driven largely by supply chain disruptions in Asia [3].
-
-With citation cards below showing the exact passages from pages 4, 7, and 12,
-plus a green **✓ Grounded in sources** badge.
-
----
-
-## How it works — technical deep dive
-
-### The RAG pipeline
-
-RAG (Retrieval-Augmented Generation) solves a fundamental limitation of
-language models: they were trained on internet data, not your specific
-documents. RAG gives the model access to your documents at query time.
-
-DocuMind's pipeline has five stages:
-
----
-
-### 1. Ingestion — turning documents into searchable chunks
-
-When you upload a PDF, DocuMind:
-
-1. Extracts the text using `pypdf` (PDF) or `python-docx` (Word)
-2. Splits the text into overlapping chunks using your chosen strategy
-3. Converts each chunk into a 384-dimensional vector using
-   `BAAI/bge-small-en-v1.5` (an embedding model that captures meaning)
-4. Stores vectors in Qdrant (a vector database) for similarity search
-5. Builds a BM25 keyword index in memory for exact-match search
-
-**Three chunking strategies are available:**
-
-| Strategy | How it works | Best for |
-|---|---|---|
-| Fixed size | Splits every 512 characters with 50-char overlap | Structured documents, contracts |
-| Semantic | Groups sentences with similar meaning together | Reports, articles |
-| Sentence window | Each sentence is its own chunk, surrounded by neighbors for context | Precise Q&A, technical docs |
-
----
-
-### 2. Hybrid retrieval — finding relevant passages
-
-When you ask a question, DocuMind searches in two ways simultaneously:
-
-**Dense retrieval** converts your question to a vector and finds chunks
-with similar meaning using cosine similarity. Excels at conceptual questions
-("what is the refund policy?").
-
-**Sparse retrieval (BM25)** finds chunks containing the exact words in
-your question. Excels at specific lookups ("what is product SKU-4821?").
-
-Both results are combined using **Reciprocal Rank Fusion (RRF)**, a formula
-that rewards chunks appearing in both result sets:
-
-```
-RRF score = 1/(60 + dense_rank) + 1/(60 + sparse_rank)
-```
-
-This consistently outperforms either method alone. Testing shows
-**+18% precision@3** compared to dense-only retrieval.
-
----
-
-### 3. Reranking — picking the best 3 chunks
-
-The top 10 RRF results are passed to a cross-encoder reranker
-(`cross-encoder/ms-marco-MiniLM-L-6-v2`). Unlike the embedding model
-that compares question and chunk separately, the cross-encoder reads
-them together and scores their relevance as a pair. This is slower
-but more accurate. The top 3 chunks are passed to the LLM.
-
----
-
-### 4. Generation — producing the answer
-
-The 3 chunks are formatted as numbered context blocks `[1]`, `[2]`, `[3]`
-and sent to `llama3.2:3b` running on Ollama. The model is instructed to:
-- Answer only from the provided context
-- Mark every claim with a citation number
-- Say "I cannot find this" if the answer is not in the chunks
-
-The response streams back token-by-token so you see the answer appear
-immediately rather than waiting for the full response.
-
----
-
-### 5. Hallucination detection
-
-After generation, each sentence in the answer is scored against the
-source chunks using an NLI (Natural Language Inference) model
-(`cross-encoder/nli-deberta-v3-small`). NLI determines whether a
-source text *entails* (supports) each claim in the answer.
-
-| Risk level | Entailment score | Meaning |
-|---|---|---|
-| **Low** (green) | > 0.7 | Answer is well-supported by the document |
-| **Medium** (amber) | 0.4 – 0.7 | Some claims may need verification |
-| **High** (red) | < 0.4 | Verify the answer against the source |
-
----
+| Layer | Technology |
+| --- | --- |
+| Frontend | React 18, TypeScript, Vite, Tailwind CSS, Axios, lucide-react |
+| API | FastAPI, Pydantic, Uvicorn |
+| LLM | Ollama via LangChain (`langchain-ollama`) |
+| Embeddings | Sentence Transformers (`BAAI/bge-small-en-v1.5`) |
+| Retrieval | Qdrant, BM25 (`rank_bm25`), Reciprocal Rank Fusion |
+| Reranking | Sentence Transformers CrossEncoder |
+| Hallucination scoring | `cross-encoder/nli-deberta-v3-small` |
+| Documents | `pypdf`, `python-docx` |
+| Database | PostgreSQL 16, `asyncpg` |
+| Containers | Docker, Docker Compose |
+| Deployment configs | Railway backend config, Fly.io Ollama config |
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                         Browser (Vercel)                      │
-│  React + TypeScript + Tailwind                                │
-│  UploadZone · DocumentList · QueryInterface · AnswerPanel     │
-└────────────────────────┬─────────────────────────────────────┘
-                         │ HTTPS
-┌────────────────────────▼─────────────────────────────────────┐
-│                    FastAPI Backend (Railway)                   │
-│                                                               │
-│  POST /documents/upload                                       │
-│    → pypdf/docx extract → chunk → embed → Qdrant + BM25      │
-│                                                               │
-│  POST /query/stream (SSE)                                     │
-│    → embed query → Qdrant search ──┐                         │
-│    → BM25 search ──────────────────┤                         │
-│    → RRF fusion → reranker ────────┤                         │
-│    → llama3.2:3b (Fly.io) → stream │                         │
-│    → NLI hallucination score ──────┘                         │
-└──────┬─────────────────────────────────────┬─────────────────┘
-       │                                     │
-┌──────▼──────┐  ┌─────────────┐  ┌─────────▼──────┐
-│   Qdrant    │  │  PostgreSQL │  │ Ollama (Fly.io) │
-│ (Railway)   │  │  (Railway)  │  │  llama3.2:3b   │
-│ Vector DB   │  │  Doc index  │  │  MIT license   │
-└─────────────┘  └─────────────┘  └────────────────┘
+```text
+Browser
+  |
+  | React + Vite UI
+  v
+FastAPI backend
+  |
+  |-- /documents/upload
+  |     Extract text -> chunk -> embed -> store vectors in Qdrant
+  |     Store metadata in PostgreSQL
+  |     Write BM25 cache to bm25_cache/{doc_id}.pkl
+  |
+  |-- /query and /query/stream
+        Embed question
+        Dense search in Qdrant
+        Sparse BM25 search
+        RRF fusion
+        Cross-encoder reranking
+        Ollama answer generation
+        NLI hallucination scoring
 ```
 
----
+### Data Flow
 
-## Tech stack
+1. A user uploads a document from the frontend.
+2. The backend extracts text from PDF, DOCX, or TXT content.
+3. The selected chunker creates searchable chunks.
+4. Embeddings are generated locally and stored in Qdrant with chunk payloads.
+5. A document metadata row is inserted into PostgreSQL.
+6. A BM25 index is serialized to `bm25_cache/`.
+7. At query time, the backend retrieves relevant chunks, reranks them, builds a
+   cited prompt, streams tokens from Ollama, and scores the final answer against
+   retrieved sources.
 
-Every component is open source with no usage fees:
+## Repository Structure
 
-| Layer | Technology | License | Hosting |
-|---|---|---|---|
-| LLM | Ollama + llama3.2:3b | MIT | Fly.io free tier |
-| Embeddings | BAAI/bge-small-en-v1.5 | MIT | Local CPU (Railway) |
-| Vector DB | Qdrant | Apache 2.0 | Railway |
-| Reranker | ms-marco-MiniLM-L-6-v2 | Apache 2.0 | Local CPU |
-| Hallucination | nli-deberta-v3-small | MIT | Local CPU |
-| Backend | FastAPI + Python 3.11 | MIT | Railway |
-| Frontend | React + TypeScript + Tailwind | MIT | Vercel |
-| Database | PostgreSQL 16 | PostgreSQL License | Railway |
+```text
+.
+|-- backend/
+|   |-- api/
+|   |   |-- main.py              # FastAPI app, startup lifecycle, routers
+|   |   |-- schemas.py           # Request and response models
+|   |   `-- routes/              # Health, document, and query endpoints
+|   |-- core/
+|   |   |-- config.py            # Pydantic settings and defaults
+|   |   `-- logging.py           # Application logging setup
+|   |-- db/
+|   |   |-- database.py          # asyncpg connection pool
+|   |   `-- models.py            # documents table DDL and helpers
+|   |-- evaluation/
+|   |   `-- metrics.py           # Offline evaluation helpers
+|   |-- generation/
+|   |   |-- chain.py             # Ollama RAG chain and streaming
+|   |   |-- hallucination.py     # NLI hallucination risk scoring
+|   |   `-- prompts.py           # RAG system prompt and context formatting
+|   |-- ingestion/
+|   |   |-- chunking.py          # Fixed, semantic, and sentence-window chunkers
+|   |   |-- embeddings.py        # SentenceTransformer model loading
+|   |   `-- pipeline.py          # End-to-end ingestion pipeline
+|   |-- retrieval/
+|   |   |-- hybrid.py            # Dense + sparse retrieval and RRF
+|   |   |-- reranker.py          # Cross-encoder reranker
+|   |   `-- vector_store.py      # Qdrant collection and search wrapper
+|   |-- Dockerfile
+|   `-- requirements.txt
+|-- frontend/
+|   |-- src/
+|   |   |-- api/client.ts        # HTTP and SSE API client
+|   |   |-- components/          # Upload, document list, query, answer UI
+|   |   |-- hooks/               # Document and query state hooks
+|   |   |-- types/               # Shared frontend TypeScript types
+|   |   |-- App.tsx
+|   |   `-- main.tsx
+|   |-- package.json
+|   |-- tailwind.config.js
+|   `-- vite.config.ts
+|-- infra/
+|   `-- fly.toml                # Ollama deployment config for Fly.io
+|-- docker-compose.yml          # Local multi-service stack
+|-- railway.json                # Backend deployment config
+|-- .env.example
+`-- README.md
+```
 
-**Zero API keys required** — anyone can use the live demo.
+## Prerequisites
 
----
-
-## Performance
-
-Measured on a standard Railway starter instance (512 MB RAM, shared CPU):
-
-| Step | Typical latency |
-|---|---|
-| Document ingestion (10-page PDF) | 8–12s |
-| Embedding (512 chunks) | 45s |
-| Retrieval (hybrid) | 80–150ms |
-| Reranking (top 10 → top 3) | 60–120ms |
-| Generation (llama3.2:3b) | 3–8s |
-| **Total query latency** | **~5–10s** |
-
----
-
-## Local development
-
-### Prerequisites
-
-- Docker + Docker Compose
+- Docker and Docker Compose
+- Node.js 20+ and npm, if running the frontend outside Docker
+- Python 3.11+, if running the backend outside Docker
 - Git
 
-### Start everything with one command
+The first backend startup may download large model files from Hugging Face.
+Ollama also needs the configured chat model to be pulled before queries work.
+
+## Environment Configuration
+
+Copy the example file before running the project:
 
 ```bash
-git clone https://github.com/yourusername/documind
-cd documind
 cp .env.example .env
-docker compose up
 ```
 
-Then pull the model (first time only):
+### Backend Variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama server base URL. |
+| `OLLAMA_MODEL` | `llama3.2:3b` | Chat model used for answer generation. |
+| `QDRANT_URL` | `http://localhost:6333` | Qdrant API URL. |
+| `QDRANT_API_KEY` | empty | Optional key for Qdrant Cloud or secured Qdrant. |
+| `QDRANT_COLLECTION` | `documind` | Qdrant collection for document chunks. |
+| `EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Sentence-transformer embedding model. |
+| `EMBED_DIM` | `384` | Embedding dimension expected by Qdrant. |
+| `CHUNK_SIZE` | `512` | Intended fixed chunk size. |
+| `CHUNK_OVERLAP` | `50` | Intended fixed chunk overlap. |
+| `TOP_K_RETRIEVE` | `10` | Intended retrieval candidate count. |
+| `TOP_K_RERANK` | `3` | Intended reranked context count. |
+| `RRF_K` | `60` | Reciprocal Rank Fusion constant. |
+| `DATABASE_URL` | `postgresql+asyncpg://postgres:password@localhost:5432/documind` | PostgreSQL connection string. |
+| `LOG_LEVEL` | `INFO` | Python logging level. |
+| `CORS_ORIGINS` | `["http://localhost:3000"]` | Intended allowed frontend origins. |
+
+### Frontend Variable
+
+| Variable | Description |
+| --- | --- |
+| `VITE_API_URL` | Backend API base URL for browser requests. Use `http://localhost:8000` for a native backend. In Docker Compose this is intentionally blank so Vite can proxy requests inside the Compose network. |
+
+### Docker Compose `.env`
+
+When the backend runs inside Docker Compose, it must use service names instead
+of host-local ports:
+
+```env
+OLLAMA_URL=http://ollama:11434
+OLLAMA_MODEL=llama3.2:3b
+
+QDRANT_URL=http://qdrant:6333
+QDRANT_API_KEY=
+QDRANT_COLLECTION=documind
+
+DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/documind
+
+LOG_LEVEL=INFO
+CORS_ORIGINS=["http://localhost:3010","http://localhost:3000"]
+```
+
+When running the backend directly on your host while Compose provides only the
+datastores, use the mapped host ports:
+
+```env
+OLLAMA_URL=http://localhost:11440
+QDRANT_URL=http://localhost:6340
+DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5442/documind
+```
+
+## Running Locally with Docker Compose
+
+1. Create `.env` and set the Compose service URLs shown above.
+
+2. Start the stack:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. Pull the Ollama model:
+
+   ```bash
+   docker compose exec ollama ollama pull llama3.2:3b
+   ```
+
+4. Open the application:
+
+   - Frontend: <http://localhost:3010>
+   - Backend API docs: <http://localhost:8020/docs>
+   - Backend health: <http://localhost:8020/health>
+   - Qdrant: <http://localhost:6340/dashboard>
+
+The Compose stack exposes:
+
+| Service | Container Port | Host Port |
+| --- | ---: | ---: |
+| Frontend | `3000` | `3010` |
+| Backend | `8000` | `8020` |
+| Ollama | `11434` | `11440` |
+| Qdrant | `6333` | `6340` |
+| PostgreSQL | `5432` | `5442` |
+
+## Running Locally Without Docker for the App
+
+You can run PostgreSQL, Qdrant, and Ollama with Compose, then run the backend
+and frontend natively for faster development feedback.
+
+1. Start dependencies:
+
+   ```bash
+   docker compose up -d ollama qdrant postgres
+   docker compose exec ollama ollama pull llama3.2:3b
+   ```
+
+2. Configure `.env` for host ports:
+
+   ```env
+   OLLAMA_URL=http://localhost:11440
+   QDRANT_URL=http://localhost:6340
+   DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5442/documind
+   ```
+
+3. Install and run the backend:
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r backend/requirements.txt
+   uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+4. Install and run the frontend in another terminal:
+
+   ```bash
+   cd frontend
+   npm install
+   VITE_API_URL=http://localhost:8000 npm run dev
+   ```
+
+5. Open <http://localhost:3000>.
+
+## API Reference
+
+Set a local API URL for the examples below:
 
 ```bash
-docker compose exec ollama ollama pull llama3.2:3b
+export API_URL=http://localhost:8020
 ```
 
-Open http://localhost:3000 — the full app is running locally.
+Use `http://localhost:8000` instead if the backend is running natively.
 
----
+### Health Check
 
-## Deployment
-
-### Backend → Railway
-
-1. Create a new Railway project
-2. Add a PostgreSQL database and a Qdrant service
-3. Deploy the backend from this repo — `railway.json` configures everything
-4. Set environment variables from `.env.example`
-
-### LLM → Fly.io
+```http
+GET /health
+```
 
 ```bash
-# Install flyctl, then:
-fly launch --name documind-ollama
-fly volumes create ollama_data --size 10
-fly deploy --config infra/fly.toml
-fly ssh console -a documind-ollama -C "ollama pull llama3.2:3b"
+curl "$API_URL/health"
 ```
 
-Set `OLLAMA_URL=https://documind-ollama.fly.dev` in Railway env vars.
+Example response:
 
-### Frontend → Vercel
-
-1. Connect the repo to Vercel
-2. Set `VITE_API_URL` to your Railway backend URL
-3. Deploy — Vercel detects Vite automatically
-
----
-
-## Project structure
-
-```
-documind/
-├── backend/
-│   ├── core/           # Settings, logging
-│   ├── ingestion/      # PDF extraction, chunking, embeddings
-│   ├── retrieval/      # Qdrant store, BM25, hybrid RRF
-│   ├── generation/     # RAG chain, prompts, hallucination scorer
-│   ├── evaluation/     # ROUGE-L, answer relevance, faithfulness
-│   ├── api/            # FastAPI routes + schemas
-│   ├── db/             # PostgreSQL models + connection pool
-│   └── requirements.txt
-├── frontend/
-│   └── src/
-│       ├── components/ # All UI components
-│       ├── hooks/      # useDocuments, useQuery
-│       ├── api/        # Axios client + SSE streaming
-│       └── types/      # TypeScript interfaces
-├── infra/
-│   └── fly.toml        # Ollama on Fly.io
-├── docker-compose.yml  # Local dev
-├── railway.json        # Railway deployment
-└── .env.example
+```json
+{
+  "status": "ok",
+  "model": "llama3.2:3b",
+  "ollama_url": "http://ollama:11434"
+}
 ```
 
----
+### Upload a Document
 
-## API reference
-
-### Upload document
-
-```
+```http
 POST /documents/upload
 Content-Type: multipart/form-data
-
-file: <binary>
-strategy: fixed | semantic | sentence_window
 ```
 
-Returns: `{ doc_id, filename, chunks_created, strategy, total_ms }`
+Form fields:
 
-### Query (streaming)
+| Field | Required | Description |
+| --- | --- | --- |
+| `file` | Yes | PDF, DOCX, or TXT file. Maximum 50 MB. |
+| `strategy` | No | `fixed`, `semantic`, or `sentence_window`. Defaults to `fixed`. |
 
-```
-POST /query/stream
-Content-Type: application/json
-
-{ "question": "...", "doc_id": "...", "stream": true }
-```
-
-Returns SSE stream:
-```
-event: sources
-data: [{"text": "...", "filename": "...", "page_num": 3}]
-
-event: token
-data: {"token": "The report"}
-
-event: complete
-data: {"hallucination": {"risk": "low", "score": 0.82, "explanation": "..."}}
+```bash
+curl -X POST "$API_URL/documents/upload" \
+  -F "file=@sample.pdf" \
+  -F "strategy=fixed"
 ```
 
-### Query (non-streaming)
+Example response:
 
+```json
+{
+  "doc_id": "b6d7ef93-3f7b-4a64-9ef5-4706b4ac3ef0",
+  "filename": "sample.pdf",
+  "chunks_created": 42,
+  "strategy": "fixed",
+  "total_ms": 8342
+}
 ```
+
+### List Documents
+
+```http
+GET /documents/
+```
+
+```bash
+curl "$API_URL/documents/"
+```
+
+Example response:
+
+```json
+[
+  {
+    "doc_id": "b6d7ef93-3f7b-4a64-9ef5-4706b4ac3ef0",
+    "filename": "sample.pdf",
+    "chunks": 42,
+    "strategy": "fixed",
+    "created_at": "2026-05-10T03:30:00.000000+00:00",
+    "size_bytes": 982312
+  }
+]
+```
+
+### Query a Document
+
+```http
 POST /query/
 Content-Type: application/json
-
-{ "question": "...", "doc_id": "..." }
 ```
 
-Returns: full `QueryResponse` with answer, citations, hallucination, metrics.
+```bash
+curl -X POST "$API_URL/query/" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "doc_id": "b6d7ef93-3f7b-4a64-9ef5-4706b4ac3ef0",
+    "question": "What are the key findings?",
+    "stream": false
+  }'
+```
 
----
+Example response:
 
-## Why this matters
+```json
+{
+  "answer": "The document identifies three key findings [1]...",
+  "citations": [
+    {
+      "number": 1,
+      "text": "The report identifies...",
+      "filename": "sample.pdf",
+      "page_num": 2
+    }
+  ],
+  "hallucination": {
+    "risk": "low",
+    "score": 0.82,
+    "explanation": "Answer is well-supported by sources"
+  },
+  "metrics": {
+    "retrieval_ms": 91,
+    "rerank_ms": 117,
+    "generation_ms": 4312,
+    "total_ms": 4588
+  }
+}
+```
 
-Most enterprise AI tools are black boxes — you cannot tell where the answer
-came from or whether to trust it. DocuMind was built around two principles:
+### Stream a Query
 
-1. **Verifiability** — every claim is linked to a source passage you can read
-2. **Transparency** — hallucination risk is scored and shown, not hidden
+```http
+POST /query/stream
+Content-Type: application/json
+Accept: text/event-stream
+```
 
-The entire stack is open source so organizations can audit it, self-host it,
-and trust it.
+```bash
+curl -N -X POST "$API_URL/query/stream" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "doc_id": "b6d7ef93-3f7b-4a64-9ef5-4706b4ac3ef0",
+    "question": "Summarize this document",
+    "stream": true
+  }'
+```
 
----
+SSE events:
 
-## License
+| Event | Payload |
+| --- | --- |
+| `sources` | Retrieved source previews before generation starts. |
+| `token` | One streamed answer token or token fragment. |
+| `complete` | Final hallucination risk payload. |
 
-MIT — see [LICENSE](LICENSE).
+### Delete a Document
+
+```http
+DELETE /documents/{doc_id}
+```
+
+```bash
+curl -X DELETE "$API_URL/documents/b6d7ef93-3f7b-4a64-9ef5-4706b4ac3ef0"
+```
+
+The delete endpoint removes matching Qdrant points, deletes the BM25 cache file,
+and removes the PostgreSQL metadata row.
+
+## Database and Storage
+
+DocuMind uses three storage layers:
+
+- PostgreSQL stores document metadata in a single `documents` table.
+- Qdrant stores embeddings and chunk payloads.
+- `bm25_cache/` stores serialized BM25 indexes by document ID.
+
+The backend creates the PostgreSQL table automatically on startup:
+
+```sql
+CREATE TABLE IF NOT EXISTS documents (
+    doc_id      TEXT PRIMARY KEY,
+    filename    TEXT NOT NULL,
+    chunks      INTEGER NOT NULL DEFAULT 0,
+    strategy    TEXT NOT NULL DEFAULT 'fixed',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    size_bytes  INTEGER NOT NULL DEFAULT 0
+);
+```
+
+There are currently no Alembic migration files. Although Alembic is listed in
+`backend/requirements.txt`, schema creation is handled directly in
+`backend/db/models.py`.
+
+## Development Workflow
+
+### Backend
+
+```bash
+source .venv/bin/activate
+uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Useful backend paths:
+
+- API entrypoint: `backend/api/main.py`
+- Routes: `backend/api/routes/`
+- Settings: `backend/core/config.py`
+- Ingestion pipeline: `backend/ingestion/pipeline.py`
+- Retrieval pipeline: `backend/retrieval/hybrid.py`
+- Generation chain: `backend/generation/chain.py`
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+npm run build
+npm run preview
+```
+
+`frontend/package.json` also defines `npm run lint`, but the repository does
+not currently include ESLint dependencies or an ESLint configuration.
+
+### Tests
+
+No automated test suite is currently checked in. `pytest` and `pytest-asyncio`
+are listed in backend requirements, but there is no `tests/` directory or
+pytest configuration yet.
+
+## Docker
+
+Build and run the full application stack:
+
+```bash
+docker compose up -d --build
+```
+
+View service status:
+
+```bash
+docker compose ps
+```
+
+View backend logs:
+
+```bash
+docker compose logs -f backend
+```
+
+The backend image is built from `backend/Dockerfile`. It installs Python
+dependencies, copies the backend package into `/app/backend`, creates
+`/app/bm25_cache`, and runs:
+
+```bash
+uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --workers 1
+```
