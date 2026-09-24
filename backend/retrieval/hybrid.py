@@ -113,5 +113,20 @@ class HybridRetriever:
                     rrf_score=rrf,
                     doc_id=chunk.doc_id
                 ))
+            else:
+                # BM25-only hit: RRF already scored it, but there's no dense
+                # SearchResult to pull filename/page_num from. Include it
+                # with the text and index we do have rather than silently
+                # dropping a hit the fusion step just ranked.
+                final.append(RetrievedChunk(
+                    text=val.get("text", ""),
+                    filename="",
+                    page_num=0,
+                    chunk_index=key[0],
+                    dense_rank=val["dense_rank"],
+                    sparse_rank=val["sparse_rank"],
+                    rrf_score=rrf,
+                    doc_id=self.doc_id
+                ))
 
         return sorted(final, key=lambda x: x.rrf_score, reverse=True)[:top_k]
